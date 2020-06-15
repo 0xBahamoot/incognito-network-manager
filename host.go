@@ -106,6 +106,7 @@ func createHost(pctx context.Context, option *HostOption, connman *IncognitoNetw
 		OnPeerStreamOpened: host.onPeerStreamOpened,
 		OnPeerStreamClosed: host.onPeerStreamClosed,
 	}
+	connman.notifee = &noti
 
 	h, err := libp2p.New(ctx, opts...)
 	if err != nil {

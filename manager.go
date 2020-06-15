@@ -9,8 +9,8 @@ import (
 )
 
 type IncognitoNetworkManager struct {
-	Host *Host
-
+	Host                *Host
+	notifee             *notifee
 	PeerWithIncognitoID map[string][]peer.ID
 	processInMessage    func(peer.ID, []byte)
 }
