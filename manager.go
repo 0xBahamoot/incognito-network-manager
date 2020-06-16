@@ -15,10 +15,10 @@ type IncognitoNetworkManager struct {
 	processInMessage    func(peer.ID, []byte)
 }
 
-func InitNetwork(hop *HostOption, processInMessage func(peer.ID, []byte)) (*IncognitoNetworkManager, error) {
+func InitNetwork(ctx context.Context, hop *HostOption, processInMessage func(peer.ID, []byte)) (*IncognitoNetworkManager, error) {
 	var man IncognitoNetworkManager
 	var err error
-	man.Host, err = createHost(nil, hop, &man)
+	man.Host, err = createHost(ctx, hop, &man)
 	man.processInMessage = processInMessage
 	return &man, err
 }

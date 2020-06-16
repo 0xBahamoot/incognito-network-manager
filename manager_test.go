@@ -22,7 +22,7 @@ func TestInitNetwork(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := InitNetwork(tt.args.hop, tt.args.processInMessage)
+			got, err := InitNetwork(nil, tt.args.hop, tt.args.processInMessage)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("InitNetwork() error = %v, wantErr %v", err, tt.wantErr)
 				return
