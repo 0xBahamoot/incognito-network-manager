@@ -1,7 +1,6 @@
 package icnwmng
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log"
@@ -25,7 +24,7 @@ import (
 	manet "github.com/multiformats/go-multiaddr-net"
 )
 
-type Host struct {
+type Server struct {
 	host          host.Host
 	natType       network.Reachability
 	broadcastAddr []string
@@ -34,26 +33,28 @@ type Host struct {
 	natDevice     nat.NAT
 	cancel        context.CancelFunc
 	identityKey   crypto.PrivKey
-	protocol      protocol.ID
 	ctx           context.Context
 
-	peerList           []peer.AddrInfo
-	connectedPeer      []peer.ID
-	relayPeerCandidate []peer.ID
-	relayPeerConns     []peer.ID
-	openedStreams      map[peer.ID]map[string]network.Stream
-	useRelayPeer       bool
+	useRelayPeer bool
 
 	connman *IncognitoNetworkManager
 }
 
-func createHost(pctx context.Context, option *HostOption, connman *IncognitoNetworkManager) (*Host, error) {
+type ServerOption struct {
+	IdentityKey     crypto.PrivKey
+	Port            int
+	NATdiscoverAddr string
+	EnableRelay     bool
+	UseRelayPeer    bool
+}
+
+func createServer(pctx context.Context, option *ServerOption, connman *IncognitoNetworkManager) (*Server, error) {
 	if pctx == nil {
 		pctx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(pctx)
 
-	host := Host{
+	server := Server{
 		natType:       network.ReachabilityUnknown,
 		broadcastAddr: []string{},
 		listenPort:    option.Port,
@@ -62,14 +63,13 @@ func createHost(pctx context.Context, option *HostOption, connman *IncognitoNetw
 		ctx:           ctx,
 		useRelayPeer:  option.UseRelayPeer,
 		connman:       connman,
-		openedStreams: make(map[peer.ID]map[string]network.Stream),
 	}
 
 	natDevice, err := checkNATDevice(ctx)
 	if err != nil {
 		fmt.Println(err)
 	} else {
-		host.natDevice = natDevice
+		server.natDevice = natDevice
 	}
 
 	hostAddrs := GetOutboundIP()
@@ -79,7 +79,7 @@ func createHost(pctx context.Context, option *HostOption, connman *IncognitoNetw
 		listenAddrs = append(listenAddrs, "/ip4/"+addr+"/tcp/"+strconv.Itoa(option.Port))
 	}
 
-	copy(host.listenAddrs, listenAddrs)
+	copy(server.listenAddrs, listenAddrs)
 
 	if option.IdentityKey == nil {
 		r := mrand.New(mrand.NewSource(time.Now().UnixNano()))
@@ -100,22 +100,14 @@ func createHost(pctx context.Context, option *HostOption, connman *IncognitoNetw
 	if option.EnableRelay {
 		opts = append(opts, libp2p.EnableRelay(circuit.OptHop))
 	}
-	noti := notifee{
-		OnPeerConnected:    host.onPeerConnected,
-		OnPeerDisconnected: host.onPeerDisconnected,
-		OnPeerStreamOpened: host.onPeerStreamOpened,
-		OnPeerStreamClosed: host.onPeerStreamClosed,
-	}
-	connman.notifee = &noti
 
 	h, err := libp2p.New(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
-	host.host = h
-	host.host.SetStreamHandler(option.protocol, host.StreamHandler)
+	server.host = h
 	if option.NATdiscoverAddr != "" {
-		err = host.ConnectPeer(option.NATdiscoverAddr)
+		err = server.ConnectPeerByAddr(option.NATdiscoverAddr)
 		if err != nil {
 			return nil, err
 		}
@@ -132,8 +124,8 @@ func createHost(pctx context.Context, option *HostOption, connman *IncognitoNetw
 						panic("After status update, client did not know its status")
 					}
 					t := stat.(event.EvtLocalReachabilityChanged)
-					host.natType = t.Reachability
-					err := host.updateBroadcastAddr()
+					server.natType = t.Reachability
+					err := server.updateBroadcastAddr()
 					if err != nil {
 						log.Fatal(err)
 					}
@@ -143,78 +135,66 @@ func createHost(pctx context.Context, option *HostOption, connman *IncognitoNetw
 			}
 		}()
 	}
-
-	if host.useRelayPeer {
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			for {
-				<-ticker.C
-				host.findRelayPeers()
-				host.connectRelayPeer()
-				host.updateBroadcastAddr()
-			}
-		}()
-	}
-	if err := host.updateBroadcastAddr(); err != nil {
+	if err := server.updateBroadcastAddr(); err != nil {
 		return nil, err
 	}
-	return &host, nil
+	return &server, nil
 }
 
-func (h *Host) GetNATType() network.Reachability {
-	return h.natType
+func (s *Server) GetNATType() network.Reachability {
+	return s.natType
 }
 
-func (h *Host) GetBroadcastAddr() []string {
-	result := make([]string, len(h.broadcastAddr))
-	copy(result, h.broadcastAddr)
+func (s *Server) GetBroadcastAddr() []string {
+	result := make([]string, len(s.broadcastAddr))
+	copy(result, s.broadcastAddr)
 	return result
 }
 
-func (h *Host) GetHost() host.Host {
-	return h.host
+func (s *Server) GetHost() host.Host {
+	return s.host
 }
 
-func (h *Host) Quit() {
-	h.cancel()
+func (s *Server) Quit() {
+	s.cancel()
 }
 
-func (h *Host) GetListeningPort() int {
-	return h.listenPort
+func (s *Server) GetListeningPort() int {
+	return s.listenPort
 }
 
-func (h *Host) updateBroadcastAddr() error {
-	switch h.natType {
+func (s *Server) updateBroadcastAddr() error {
+	switch s.natType {
 	case network.ReachabilityUnknown, network.ReachabilityPrivate:
 		//behind router that is nested NATs or that not support PCP protocol
-		hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", h.host.ID().Pretty()))
+		hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", s.host.ID().Pretty()))
 		var fullAddr []string
-		for _, addr := range h.host.Addrs() {
+		for _, addr := range s.host.Addrs() {
 			fullAddr = append(fullAddr, addr.Encapsulate(hostAddr).String())
 		}
-		if h.useRelayPeer {
-			fullAddr = append(fullAddr, h.createRelayAddresses()...)
+		if s.useRelayPeer {
+			fullAddr = append(fullAddr, s.connman.createRelayAddresses()...)
 		}
-		h.broadcastAddr = fullAddr
+		s.broadcastAddr = fullAddr
 	case network.ReachabilityPublic:
-		if h.natDevice == nil {
+		if s.natDevice == nil {
 			//public IP case
-			hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", h.host.ID().Pretty()))
+			hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", s.host.ID().Pretty()))
 			var fullAddr []string
-			for _, addr := range h.host.Addrs() {
+			for _, addr := range s.host.Addrs() {
 				fullAddr = append(fullAddr, addr.Encapsulate(hostAddr).String())
 			}
-			h.broadcastAddr = fullAddr
+			s.broadcastAddr = fullAddr
 		} else {
 			//behind public IP router that support PCP protocol
-			for _, addr := range h.host.Addrs() {
+			for _, addr := range s.host.Addrs() {
 				if manet.IsPublicAddr(addr) {
-					hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", h.host.ID().Pretty()))
+					hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", s.host.ID().Pretty()))
 					var fullAddr []string
-					for _, addr := range h.host.Addrs() {
+					for _, addr := range s.host.Addrs() {
 						fullAddr = append(fullAddr, addr.Encapsulate(hostAddr).String())
 					}
-					h.broadcastAddr = fullAddr
+					s.broadcastAddr = fullAddr
 					return nil
 				}
 			}
@@ -224,75 +204,44 @@ func (h *Host) updateBroadcastAddr() error {
 	return nil
 }
 
-func (h *Host) GetHostID() peer.ID {
-	return h.host.ID()
+func (s *Server) GetHostID() peer.ID {
+	return s.host.ID()
 }
 
-func (h *Host) ConnectPeer(peerAddr string) error {
+func (s *Server) ConnectPeerByAddr(peerAddr string) error {
 	peerInfo, err := PeerInfoFromString(peerAddr)
 	if err != nil {
 		return err
 	}
 
-	if err := h.host.Connect(context.Background(), *peerInfo); err != nil {
+	if err := s.host.Connect(context.Background(), *peerInfo); err != nil {
 		return err
 	}
-	if !checkPeerIDExist(peerIDsFromPeerInfos(h.peerList), peerInfo.ID) {
-		h.peerList = append(h.peerList, *peerInfo)
-		h.host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, time.Hour)
-	}
+	// if !checkPeerIDExist(peerIDsFromPeerInfos(s.peerList), peerInfo.ID) {
+	// 	s.peerList = append(s.peerList, *peerInfo)
+	// 	s.host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, time.Hour)
+	// }
 	return nil
 }
 
-func (h *Host) GetListenAddrs() []string {
-	result := make([]string, len(h.listenAddrs))
-	copy(result, h.listenAddrs)
+func (s *Server) GetListenAddrs() []string {
+	result := make([]string, len(s.listenAddrs))
+	copy(result, s.listenAddrs)
 	return result
 }
 
-func (h *Host) GetAllPeers() []peer.ID {
-	result := []peer.ID{}
-	for _, peer := range h.peerList {
-		result = append(result, peer.ID)
-	}
-	return result
-}
-
-func (h *Host) onPeerConnected(pID peer.ID) {
-	fmt.Println("onPeerConnected", pID)
-	h.connectedPeer = append(h.connectedPeer, pID)
-}
-func (h *Host) onPeerDisconnected(pID peer.ID) {
-	fmt.Println("onPeerDisconnected", pID)
-	for idx, peerID := range h.connectedPeer {
-		if peerID == pID {
-			copy(h.connectedPeer[idx:], h.connectedPeer[idx+1:])
-			h.connectedPeer[len(h.connectedPeer)-1] = ""
-			h.connectedPeer = h.connectedPeer[:len(h.connectedPeer)-1]
+func (s *Server) createStream(ctx context.Context, peerID peer.ID, protocol protocol.ID, forceNew bool) (network.Stream, error) {
+	if !forceNew {
+		for _, peerConn := range s.host.Network().Conns() {
+			if peerConn.RemotePeer() != peerID {
+				continue
+			}
+			for _, stream := range peerConn.GetStreams() {
+				if stream.Protocol() == protocol {
+					return nil, fmt.Errorf("%s | protocol:%s | peerID:%s", ErrCreateStreamExist, protocol, peerID)
+				}
+			}
 		}
 	}
-	for idx, peerID := range h.relayPeerConns {
-		if peerID == pID {
-			copy(h.connectedPeer[idx:], h.connectedPeer[idx+1:])
-			h.connectedPeer[len(h.connectedPeer)-1] = ""
-			h.connectedPeer = h.connectedPeer[:len(h.connectedPeer)-1]
-		}
-	}
-}
-func (h *Host) onPeerStreamOpened(pID peer.ID, stream network.Stream) {
-	fmt.Println("onPeerStreamOpened", pID)
-	if len(h.openedStreams[pID]) == 0 {
-		h.openedStreams[pID] = make(map[string]network.Stream)
-	}
-	h.openedStreams[pID][stream.ID()] = stream
-	rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-	go h.inMessageHandler(stream.Conn().RemotePeer(), rw)
-}
-func (h *Host) onPeerStreamClosed(pID peer.ID, stream network.Stream) {
-	fmt.Println("onPeerStreamClosed", pID)
-	delete(h.openedStreams[pID], stream.ID())
-}
-
-func (h *Host) SetNotifee(n network.Notifiee) {
-	h.host.Network().Notify(n)
+	return s.host.NewStream(ctx, peerID, protocol)
 }

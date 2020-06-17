@@ -8,10 +8,10 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-func (h *Host) createRelayAddresses() []string {
+func (man *IncognitoNetworkManager) createRelayAddresses() []string {
 	var result []string
-	for _, peerID := range h.relayPeerConns {
-		relayaddr, err := ma.NewMultiaddr("/p2p/" + peerID.Pretty() + "/p2p-circuit/p2p/" + h.host.ID().Pretty())
+	for _, peerID := range man.relayPeerConns {
+		relayaddr, err := ma.NewMultiaddr("/p2p/" + peerID.Pretty() + "/p2p-circuit/p2p/" + man.server.host.ID().Pretty())
 		if err != nil {
 			panic(err)
 		}
@@ -20,47 +20,47 @@ func (h *Host) createRelayAddresses() []string {
 	return result
 }
 
-func (h *Host) findRelayPeers() {
-	h.relayPeerCandidate = []peer.ID{}
-	for _, peer := range h.peerList {
-		if !checkPeerIDExist(h.relayPeerCandidate, peer.ID) {
-			canHop, err := circuit.CanHop(h.ctx, h.host, peer.ID)
+func (man *IncognitoNetworkManager) findRelayPeers() {
+	man.relayPeerCandidate = []peer.ID{}
+	for _, peer := range man.peerList {
+		if !checkPeerIDExist(man.relayPeerCandidate, peer.ID) {
+			canHop, err := circuit.CanHop(man.ctx, man.server.host, peer.ID)
 			if err != nil {
 				fmt.Println(err)
 			}
 			if canHop {
-				h.relayPeerCandidate = append(h.relayPeerCandidate, peer.ID)
+				man.relayPeerCandidate = append(man.relayPeerCandidate, peer.ID)
 			}
 		}
 	}
 }
 
-func (h *Host) connectRelayPeer() {
+func (man *IncognitoNetworkManager) connectRelayPeer() {
 	newRelayPeerCandidate := []peer.ID{}
-	for _, peerID := range h.relayPeerCandidate {
-		if checkPeerIDExist(h.relayPeerConns, peerID) {
+	for _, peerID := range man.relayPeerCandidate {
+		if checkPeerIDExist(man.relayPeerConns, peerID) {
 			continue
 		}
-		if len(h.relayPeerConns) >= maxRelayPeer {
+		if len(man.relayPeerConns) >= maxRelayPeer {
 			newRelayPeerCandidate = append(newRelayPeerCandidate, peerID)
 			continue
 		}
-		if checkPeerIDExist(h.connectedPeer, peerID) {
-			h.relayPeerConns = append(h.relayPeerConns, peerID)
+		if checkPeerIDExist(man.connectedPeer, peerID) {
+			man.relayPeerConns = append(man.relayPeerConns, peerID)
 			continue
 		}
-		err := h.host.Connect(h.ctx, h.host.Peerstore().PeerInfo(peerID))
+		err := man.server.host.Connect(man.ctx, man.server.host.Peerstore().PeerInfo(peerID))
 		if err != nil {
 			fmt.Println(err)
 		} else {
-			h.relayPeerConns = append(h.relayPeerConns, peerID)
+			man.relayPeerConns = append(man.relayPeerConns, peerID)
 		}
 	}
-	h.relayPeerCandidate = newRelayPeerCandidate
+	man.relayPeerCandidate = newRelayPeerCandidate
 }
 
-func (h *Host) getCurrentPeerRelay() []peer.ID {
-	result := make([]peer.ID, len(h.relayPeerConns))
-	copy(result, h.relayPeerConns)
+func (man *IncognitoNetworkManager) getCurrentPeerRelay() []peer.ID {
+	result := make([]peer.ID, len(man.relayPeerConns))
+	copy(result, man.relayPeerConns)
 	return result
 }

@@ -2,43 +2,24 @@ package icnwmng
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 
-	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 )
 
-func (h *Host) CreateStream(ctx context.Context, peerID peer.ID, forceNew bool) error {
-	if !forceNew {
-		for _, peerConn := range h.host.Network().Conns() {
-			if peerConn.RemotePeer() != peerID {
-				continue
-			}
-			for _, stream := range peerConn.GetStreams() {
-				if stream.Protocol() == h.protocol {
-					return fmt.Errorf("%s | protocol:%s | peerID:%s", ErrCreateStreamExist, h.protocol, peerID)
-				}
-			}
-		}
-	}
-	h.host.NewStream(ctx, peerID, h.protocol)
-	return nil
-}
-
-func (h *Host) inMessageHandler(peerID peer.ID, rw *bufio.ReadWriter) {
+func (man *IncognitoNetworkManager) inMessageHandler(peerID peer.ID, rw *bufio.ReadWriter) {
 	for {
 		bytes, err := readBytes(rw, delimMessageByte, spamMessageSize)
 		if err != nil {
 			fmt.Println(err)
 		}
-		h.connman.processInMessage(peerID, bytes)
+		man.processInMessage(peerID, bytes)
 	}
 }
 
-func (h *Host) sendMessage(peer peer.ID, msg []byte) error {
-	for _, stream := range h.openedStreams[peer] {
+func (man *IncognitoNetworkManager) sendMessage(peer peer.ID, msg []byte) error {
+	for _, stream := range man.openedStreams[peer] {
 		rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
 		_, err := rw.Writer.Write(msg)
 		if err != nil {
@@ -53,14 +34,6 @@ func (h *Host) sendMessage(peer peer.ID, msg []byte) error {
 		return nil
 	}
 	return nil
-}
-
-func (h *Host) StreamHandler(stream network.Stream) {
-	//Don't handle other protocols
-	if stream.Protocol() != h.protocol {
-		stream.Close()
-		return
-	}
 }
 
 // readString - read data from received message on stream

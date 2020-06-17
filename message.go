@@ -7,7 +7,7 @@ func (man *IncognitoNetworkManager) BroadcastMessage(msg []byte) {
 }
 
 func (man *IncognitoNetworkManager) SendMessageToPeerID(msg []byte, peerID peer.ID) {
-	man.Host.sendMessage(peerID, msg)
+	man.sendMessage(peerID, msg)
 }
 
 func (man *IncognitoNetworkManager) ConnectToPeerID(peerID string) {
